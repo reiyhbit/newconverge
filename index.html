@@ -606,38 +606,6 @@
         .fullscreen #controls-container {
             display: none;
         }
-        
-        /* Volume Control */
-        #volume-control {
-            position: absolute;
-            bottom: 60px;
-            right: 10px;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 10px;
-            border-radius: 8px;
-            display: none;
-            flex-direction: column;
-            align-items: center;
-            z-index: 20;
-        }
-        
-        #volume-slider {
-            width: 80px;
-            height: 4px;
-            -webkit-appearance: none;
-            background: #555;
-            border-radius: 5px;
-            margin: 8px 0;
-        }
-        
-        #volume-slider::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            width: 16px;
-            height: 16px;
-            border-radius: 50%;
-            background: #61dafb;
-            cursor: pointer;
-        }
     </style>
 </head>
 <body>
@@ -691,7 +659,7 @@
                 </button>
             </div>
             
-            <!-- Provider Buttons - TOP ROW -->
+            <!-- Provider Buttons - TOP ROW (NASA TAAS NA!) -->
             <div id="provider-buttons">
                 <button class="provider-btn cignal" id="cignal-btn">
                     <i class="fas fa-satellite-dish"></i> CIGNAL
@@ -717,7 +685,7 @@
                 <button class="category-tab" data-category="favorites">Favorites</button>
             </div>
             
-            <!-- Channels Grid - MAY RECTANGLE LOGOS NA! -->
+            <!-- Channels Grid -->
             <div id="channels-grid">
                 <!-- Channels will be loaded here -->
             </div>
@@ -777,8 +745,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.7.11/shaka-player.compiled.js"></script>
     
     <script>
-        // SIMPLIFIED IPTV App - WORKING VERSION
-        class SimpleIPTVApp {
+        // WORKING IPTV App - Using the EXACT parsing method from reference
+        class WorkingIPTVApp {
             constructor() {
                 this.channels = [];
                 this.currentChannelIndex = 0;
@@ -787,6 +755,17 @@
                 this.categories = {};
                 this.currentCategory = 'all';
                 
+                // EXACT SAME AUTO-LOAD CONFIG as reference
+                this.AUTO_LOAD_CONFIG = {
+                    enabled: true,
+                    delay: 1000,
+                    playlistUrls: [
+                        "https://converse.nathcreqtives.com/playlist.m3u?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJFZ2l0IiwiZXhwIjoxNzY2OTgxMDg4fQ.T-uzlxfi9z6B4ieKAcyv9vb51p_aSLldzsQjj1GPPlg"
+                    ],
+                    playFirstChannel: true,
+                    maxRetries: 3
+                };
+                
                 this.initializeApp();
             }
             
@@ -794,10 +773,11 @@
                 this.initializePlayer();
                 this.setupEventListeners();
                 this.updateFavoritesUI();
-                this.loadDefaultChannels();
+                this.initAutoLoad(); // Auto-load on startup
             }
             
             initializePlayer() {
+                shaka.polyfill.installAll();
                 if (shaka.Player.isBrowserSupported()) {
                     this.player = new shaka.Player(document.getElementById('video'));
                     
@@ -822,138 +802,238 @@
                     this.player.addEventListener('error', (error) => {
                         this.showLoading(false);
                         this.updateChannelStatus('Error');
-                        console.error('Player error:', error);
+                        this.showError(`Error: ${error.code}`);
                     });
                     
                 } else {
-                    console.error('Browser not supported!');
+                    this.showError('Your browser does not support Shaka Player.');
                 }
             }
             
-            // SIMPLE M3U PARSER - From your reference script
+            // EXACT AUTO-LOAD FUNCTION from reference
+            async initAutoLoad() {
+                if (!this.AUTO_LOAD_CONFIG.enabled) return;
+                
+                console.log(`Auto-loading playlist in ${this.AUTO_LOAD_CONFIG.delay}ms...`);
+                
+                setTimeout(async () => {
+                    try {
+                        this.showToast('Auto-loading playlist...', 'info', 2000);
+                        this.showLoading(true);
+                        
+                        let m3uData;
+                        let successUrl = null;
+                        let retryCount = 0;
+                        
+                        // Try all URLs until one works
+                        for (const playlistUrl of this.AUTO_LOAD_CONFIG.playlistUrls) {
+                            try {
+                                console.log(`Trying playlist URL: ${playlistUrl}`);
+                                const response = await fetch(playlistUrl, {
+                                    method: 'GET',
+                                    mode: 'cors',
+                                    headers: {
+                                        'Accept': 'application/x-mpegurl, text/plain, */*'
+                                    }
+                                });
+                                
+                                if (!response.ok) {
+                                    throw new Error(`HTTP ${response.status}`);
+                                }
+                                
+                                m3uData = await response.text();
+                                
+                                // Check if we got valid M3U data
+                                if (m3uData && m3uData.includes('#EXTM3U')) {
+                                    successUrl = playlistUrl;
+                                    console.log(`Successfully loaded from: ${playlistUrl}`);
+                                    break;
+                                } else {
+                                    throw new Error('Invalid M3U format');
+                                }
+                                
+                            } catch (urlError) {
+                                console.warn(`Failed to load from ${playlistUrl}:`, urlError);
+                                retryCount++;
+                                
+                                if (retryCount >= this.AUTO_LOAD_CONFIG.maxRetries) {
+                                    throw new Error('All playlist URLs failed');
+                                }
+                                continue;
+                            }
+                        }
+                        
+                        if (!m3uData) {
+                            throw new Error('No working playlist URLs found');
+                        }
+                        
+                        this.channels = this.parseM3U(m3uData);
+                        
+                        if (this.channels.length === 0) {
+                            // If no channels found, create a sample channel
+                            this.channels = [{
+                                name: 'Sample Stream (Auto-loaded)',
+                                url: 'https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8',
+                                group: 'Auto-loaded',
+                                logo: ''
+                            }];
+                            this.showToast('Using sample stream', 'warning');
+                        }
+                        
+                        this.extractCategories();
+                        this.updateChannelsGrid();
+                        
+                        // Auto-play first channel if available
+                        if (this.AUTO_LOAD_CONFIG.playFirstChannel && this.channels.length > 0) {
+                            setTimeout(() => {
+                                this.playChannel(0);
+                                const sourceName = successUrl ? new URL(successUrl).hostname : 'backup';
+                                this.showToast(`Auto-playing from ${sourceName}: ${this.channels[0].name}`, 'success');
+                            }, 500);
+                        } else {
+                            const sourceName = successUrl ? new URL(successUrl).hostname : 'backup';
+                            this.showToast(`Loaded ${this.channels.length} channels from ${sourceName}`, 'success');
+                        }
+                        
+                    } catch (error) {
+                        console.error('Auto-load failed:', error);
+                        this.showError('Auto-load failed. Using demo channels.');
+                        this.loadDemoChannels();
+                        
+                    } finally {
+                        this.showLoading(false);
+                    }
+                }, this.AUTO_LOAD_CONFIG.delay);
+            }
+            
+            // EXACT M3U PARSING from reference
             parseM3U(data) {
-                console.log('Parsing M3U data...');
                 const lines = data.split('\n');
                 const channels = [];
                 let currentChannel = {};
-                
-                for (let i = 0; i < lines.length; i++) {
-                    const line = lines[i].trim();
+                let groupTitle = '';
+
+                for (const line of lines) {
+                    const trimmedLine = line.trim();
                     
-                    if (line.startsWith('#EXTM3U')) {
+                    if (trimmedLine.startsWith('#EXTM3U')) {
                         continue;
                     }
                     
-                    if (line.startsWith('#EXTINF:')) {
-                        // Parse EXTINF line
-                        const match = line.match(/#EXTINF:-?\d*\s*(.*?)\s*,(.*)/);
-                        if (match) {
-                            currentChannel = {
-                                name: match[2] || 'Unknown Channel',
-                                group: 'General',
-                                logo: '',
-                                url: ''
-                            };
-                            
-                            // Extract group-title if available
-                            const groupMatch = match[1].match(/group-title="([^"]+)"/);
-                            if (groupMatch) {
-                                currentChannel.group = groupMatch[1];
+                    if (trimmedLine.startsWith('#EXTINF:')) {
+                        const info = trimmedLine.split(/,(.*)/s);
+                        const params = info[0].split(' ');
+                        currentChannel.name = info[1]?.trim() || 'Unknown Channel';
+                        
+                        // Parse additional EXTINF parameters
+                        params.forEach(param => {
+                            if (param.includes('group-title=')) {
+                                currentChannel.group = param.split('=')[1]?.replace(/"/g, '');
                             }
-                            
-                            // Extract tvg-logo if available
-                            const logoMatch = match[1].match(/tvg-logo="([^"]+)"/);
-                            if (logoMatch) {
-                                currentChannel.logo = logoMatch[1];
+                            if (param.includes('tvg-logo=')) {
+                                currentChannel.logo = param.split('=')[1]?.replace(/"/g, '');
                             }
+                        });
+                    } 
+                    else if (trimmedLine.startsWith('#EXTGRP:')) {
+                        groupTitle = trimmedLine.substring(8).trim();
+                    }
+                    else if (trimmedLine.startsWith('#KODIPROP:')) {
+                        const prop = trimmedLine.substring(10);
+                        if (prop.startsWith('inputstream.adaptive.license_type=')) {
+                            const type = prop.split('=')[1]?.trim();
+                            currentChannel.licenseType = type.toLowerCase() === 'clearkey' ? 'org.w3.clearkey' : type;
+                        } 
+                        else if (prop.startsWith('inputstream.adaptive.license_key=')) {
+                            const keyData = prop.split('=').slice(1).join('=');
+                            this.parseLicenseKeyData(currentChannel, keyData);
                         }
                     }
-                    else if (line && !line.startsWith('#') && currentChannel.name) {
-                        // This is the URL line
-                        currentChannel.url = line.trim();
-                        currentChannel.id = channels.length;
+                    else if (trimmedLine && !trimmedLine.startsWith('#')) {
+                        currentChannel.url = trimmedLine;
+                        if (!currentChannel.group && groupTitle) {
+                            currentChannel.group = groupTitle;
+                        }
                         
-                        // Add to channels list
-                        channels.push({...currentChannel});
+                        channels.push({
+                            ...currentChannel,
+                            id: channels.length
+                        });
+                        
                         currentChannel = {};
                     }
                 }
-                
-                console.log(`Parsed ${channels.length} channels`);
                 return channels;
             }
             
-            async loadPlaylistFromUrl(url) {
-                try {
-                    this.showLoading(true);
-                    this.showToast('Loading playlist...', 'info');
-                    
-                    const response = await fetch(url);
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}`);
+            parseLicenseKeyData(channel, keyData) {
+                if (keyData.trim().startsWith('{')) {
+                    try {
+                        const parsedJson = JSON.parse(keyData);
+                        if (parsedJson.keys && parsedJson.keys.length > 0) {
+                            const keyInfo = parsedJson.keys[0];
+                            if (keyInfo.k && keyInfo.kid) {
+                                channel.k2 = this.base64UrlToHex(keyInfo.k);
+                                channel.k1 = this.base64UrlToHex(keyInfo.kid);
+                                channel.licenseType = 'org.w3.clearkey';
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse license_key JSON:', keyData, e);
                     }
-                    
-                    const m3uData = await response.text();
-                    this.channels = this.parseM3U(m3uData);
-                    
-                    if (this.channels.length === 0) {
-                        throw new Error('No channels found in playlist');
+                }
+                else if (keyData.includes('http://') || keyData.includes('https://')) {
+                    channel.licenseKey = keyData.trim();
+                } 
+                else {
+                    const keyParts = keyData.split(':');
+                    if (keyParts.length === 2 && keyParts[0].trim() && keyParts[1].trim()) {
+                        channel.k1 = keyParts[0].trim();
+                        channel.k2 = keyParts[1].trim();
                     }
-                    
-                    this.extractCategories();
-                    this.updateChannelsGrid();
-                    
-                    // Auto-play first channel
-                    if (this.channels.length > 0) {
-                        this.playChannel(0);
-                        this.showToast(`Loaded ${this.channels.length} channels`, 'success');
-                    }
-                    
-                } catch (error) {
-                    console.error('Failed to load playlist:', error);
-                    this.showToast('Failed to load playlist. Using demo channels.', 'error');
-                    this.loadDemoChannels();
-                } finally {
-                    this.showLoading(false);
                 }
             }
             
-            loadDefaultChannels() {
-                // Try to load from your M3U URL first
-                const m3uUrl = "https://converse.nathcreqtives.com/playlist.m3u?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJFZ2l0IiwiZXhwIjoxNzY2OTgxMDg4fQ.T-uzlxfi9z6B4ieKAcyv9vb51p_aSLldzsQjj1GPPlg";
-                this.loadPlaylistFromUrl(m3uUrl);
+            base64UrlToHex(base64Url) {
+                try {
+                    let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+                    while (base64.length % 4) {
+                        base64 += '=';
+                    }
+                    const raw = atob(base64);
+                    let hex = '';
+                    for (let i = 0; i < raw.length; i++) {
+                        hex += raw.charCodeAt(i).toString(16).padStart(2, '0');
+                    }
+                    return hex;
+                } catch (e) {
+                    console.error('Failed to decode base64 string:', base64Url, e);
+                    return null;
+                }
             }
             
             loadDemoChannels() {
-                // Fallback demo channels
                 this.channels = [
                     {
-                        id: 0,
                         name: 'Tears of Steel (Demo)',
                         url: 'https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8',
                         group: 'Demo',
-                        logo: ''
+                        logo: '',
+                        id: 0
                     },
                     {
-                        id: 1,
                         name: 'Big Buck Bunny',
                         url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
                         group: 'Demo',
-                        logo: ''
+                        logo: '',
+                        id: 1
                     },
                     {
-                        id: 2,
                         name: 'Sintel (Demo)',
                         url: 'https://dash.akamaized.net/dash264/TestCases/1c/qualcomm/1/MultiRate.mpd',
                         group: 'Demo',
-                        logo: ''
-                    },
-                    {
-                        id: 3,
-                        name: 'Live Stream Test',
-                        url: 'https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8',
-                        group: 'Demo',
-                        logo: ''
+                        logo: '',
+                        id: 2
                     }
                 ];
                 
@@ -966,12 +1046,11 @@
             }
             
             loadProviderPreset(provider) {
-                // Demo provider channels
                 const providerChannels = {
                     cignal: [
                         {
                             id: 0,
-                            name: 'Cignal TV 1',
+                            name: 'Cignal TV Channel 1',
                             url: 'https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8',
                             group: 'Cignal',
                             logo: 'https://upload.wikimedia.org/wikipedia/en/thumb/9/9c/Cignal_TV_logo.svg/1200px-Cignal_TV_logo.svg.png'
@@ -980,13 +1059,6 @@
                             id: 1,
                             name: 'Cignal Sports',
                             url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-                            group: 'Cignal',
-                            logo: 'https://upload.wikimedia.org/wikipedia/en/thumb/9/9c/Cignal_TV_logo.svg/1200px-Cignal_TV_logo.svg.png'
-                        },
-                        {
-                            id: 2,
-                            name: 'Cignal Movies',
-                            url: 'https://dash.akamaized.net/dash264/TestCases/1c/qualcomm/1/MultiRate.mpd',
                             group: 'Cignal',
                             logo: 'https://upload.wikimedia.org/wikipedia/en/thumb/9/9c/Cignal_TV_logo.svg/1200px-Cignal_TV_logo.svg.png'
                         }
@@ -1003,13 +1075,6 @@
                             id: 1,
                             name: 'Converge Sports',
                             url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-                            group: 'Converge',
-                            logo: 'https://www.convergeict.com/wp-content/uploads/2020/12/Converge_logo-01.svg'
-                        },
-                        {
-                            id: 2,
-                            name: 'Converge News',
-                            url: 'https://dash.akamaized.net/dash264/TestCases/1c/qualcomm/1/MultiRate.mpd',
                             group: 'Converge',
                             logo: 'https://www.convergeict.com/wp-content/uploads/2020/12/Converge_logo-01.svg'
                         }
@@ -1032,7 +1097,6 @@
                     'favorites': this.channels.filter(channel => this.favorites.includes(channel.id))
                 };
                 
-                // Extract unique groups
                 this.channels.forEach(channel => {
                     if (channel.group && !this.categories[channel.group]) {
                         this.categories[channel.group] = this.channels.filter(c => c.group === channel.group);
@@ -1045,7 +1109,7 @@
             updateCategoryTabs() {
                 const tabsContainer = document.getElementById('category-tabs');
                 
-                // Keep only All and Favorites tabs initially
+                // Remove existing tabs (keep All and Favorites)
                 const existingTabs = Array.from(tabsContainer.querySelectorAll('.category-tab'));
                 existingTabs.forEach(tab => {
                     if (!['all', 'favorites'].includes(tab.dataset.category)) {
@@ -1053,7 +1117,7 @@
                     }
                 });
                 
-                // Add category tabs for groups
+                // Add category tabs
                 Object.keys(this.categories).forEach(category => {
                     if (category !== 'all' && category !== 'favorites') {
                         const tab = document.createElement('button');
@@ -1085,7 +1149,6 @@
                         <div style="grid-column: 1 / -1; text-align: center; padding: 30px; color: #888; font-size: 12px;">
                             <i class="fas fa-tv" style="font-size: 40px; margin-bottom: 10px; display: block;"></i>
                             <p>${this.currentCategory === 'favorites' ? 'No favorite channels yet' : 'No channels available'}</p>
-                            <p style="font-size: 10px; margin-top: 5px;">Tap the star to add favorites</p>
                         </div>
                     `;
                     return;
@@ -1099,9 +1162,8 @@
                     card.className = 'channel-card';
                     if (isActive) card.classList.add('active');
                     
-                    // Get initial for placeholder
                     const initial = channel.name.charAt(0).toUpperCase();
-                    const colors = ['#61dafb', '#4fa3c4', '#FF6B35', '#00A8FF', '#764ba2'];
+                    const colors = ['#61dafb', '#4fa3c4', '#FF6B35', '#00A8FF'];
                     const colorIndex = channel.id % colors.length;
                     
                     card.innerHTML = `
@@ -1132,6 +1194,24 @@
                 
                 try {
                     this.showLoading(true);
+                    
+                    // Configure DRM if available
+                    const config = {
+                        drm: {},
+                        streaming: {
+                            bufferingGoal: 30,
+                            rebufferingGoal: 2
+                        }
+                    };
+                    
+                    if (channel.licenseType === 'org.w3.clearkey' && channel.k1 && channel.k2) {
+                        config.drm.clearKeys = { [channel.k1]: channel.k2 };
+                    } else if (channel.licenseType && channel.licenseKey) {
+                        config.drm.servers = { [channel.licenseType]: channel.licenseKey };
+                    }
+                    
+                    this.player.configure(config);
+                    
                     await this.player.load(channel.url);
                     
                     this.updateChannelInfo(channel.name);
@@ -1224,7 +1304,7 @@
                 document.getElementById('maximize-btn').addEventListener('click', () => this.toggleFullscreen());
                 
                 // Reload playlist
-                document.getElementById('reload-playlist-btn').addEventListener('click', () => this.loadDefaultChannels());
+                document.getElementById('reload-playlist-btn').addEventListener('click', () => this.initAutoLoad());
                 
                 // Category tabs
                 document.querySelectorAll('.category-tab').forEach(tab => {
@@ -1250,7 +1330,6 @@
                     item.className = 'channel-item';
                     if (isActive) item.classList.add('active');
                     
-                    // Get initial for placeholder
                     const initial = channel.name.charAt(0).toUpperCase();
                     
                     item.innerHTML = `
@@ -1367,7 +1446,7 @@
         
         // Initialize app
         document.addEventListener('DOMContentLoaded', () => {
-            window.iptvApp = new SimpleIPTVApp();
+            window.iptvApp = new WorkingIPTVApp();
         });
     </script>
 </body>
